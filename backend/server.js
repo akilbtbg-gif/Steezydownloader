@@ -1,11 +1,15 @@
+// server.js
 const express = require('express');
 const cors = require('cors');
-const ytdl = require('ytdl-core');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const rateLimit = require('express-rate-limit');
+const os = require('os');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS - update origin for production
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
   methods: ['POST', 'OPTIONS'],
@@ -14,103 +18,134 @@ app.use(cors({
 
 app.use(express.json());
 
-// Format duration from seconds to MM:SS or HH:MM:SS
-function formatDuration(seconds) {
-  const hrs = Math.floor(seconds / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-  if (hrs > 0) {
-    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  }
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
+// Basic rate limiting
+const limiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 5, // max 5 requests per minute per IP
+  message: { success: false, error: 'Too many requests, slow down!' }
+});
+app.use(limiter);
+
+// Timeout & Max file size (in bytes)
+const DOWNLOAD_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
+
+// Helper to generate temp file
+function getTempFilePath(extension = '.mp4') {
+  return path.join(os.tmpdir(), `yt-${Date.now()}${extension}`);
 }
 
-// Format view count
-function formatViews(count) {
-  const num = parseInt(count);
-  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M views`;
-  if (num >= 1000) return `${(num / 1000).toFixed(1)}K views`;
-  return `${num} views`;
-}
-
-// POST /api/info - Get video information
+// POST /api/info
 app.post('/api/info', async (req, res) => {
   try {
     const { url } = req.body;
+    if (!url) return res.status(400).json({ success: false, error: 'Missing URL' });
 
-    if (!url || !ytdl.validateURL(url)) {
-      return res.status(400).json({ success: false, error: 'Invalid YouTube URL' });
-    }
+    // Spawn yt-dlp to get JSON info
+    const ytdlp = spawn('yt-dlp', ['-J', url]);
 
-    const info = await ytdl.getInfo(url);
-    const details = info.videoDetails;
+    let output = '';
+    let errorOutput = '';
+    const timeout = setTimeout(() => {
+      ytdlp.kill();
+      res.status(500).json({ success: false, error: 'Timeout fetching video info' });
+    }, DOWNLOAD_TIMEOUT);
 
-    res.json({
-      success: true,
-      data: {
-        videoId: details.videoId,
-        title: details.title,
-        description: details.description?.substring(0, 500) || '',
-        thumbnail: details.thumbnails[details.thumbnails.length - 1]?.url || '',
-        channelTitle: details.author.name,
-        duration: formatDuration(parseInt(details.lengthSeconds)),
-        viewCount: formatViews(details.viewCount),
-        publishedAt: details.publishDate || ''
+    ytdlp.stdout.on('data', data => output += data.toString());
+    ytdlp.stderr.on('data', data => errorOutput += data.toString());
+
+    ytdlp.on('close', code => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        return res.status(500).json({ success: false, error: errorOutput || 'Failed fetching video info' });
+      }
+      try {
+        const info = JSON.parse(output);
+        res.json({
+          success: true,
+          data: {
+            id: info.id,
+            title: info.title,
+            uploader: info.uploader,
+            duration: info.duration,
+            thumbnail: info.thumbnail,
+            view_count: info.view_count,
+            formats: info.formats.map(f => ({
+              format_id: f.format_id,
+              ext: f.ext,
+              resolution: f.resolution || f.height + 'p',
+              filesize: f.filesize || 0,
+              note: f.format_note || ''
+            }))
+          }
+        });
+      } catch (err) {
+        res.status(500).json({ success: false, error: 'Invalid info JSON' });
       }
     });
-  } catch (error) {
-    console.error('Info error:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to fetch video information' });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// POST /api/download - Stream video/audio download
+// POST /api/download
 app.post('/api/download', async (req, res) => {
   try {
-    const { url, format, quality } = req.body;
+    const { url, format = 'mp4', quality = 'best' } = req.body;
+    if (!url) return res.status(400).json({ success: false, error: 'Missing URL' });
 
-    if (!url || !ytdl.validateURL(url)) {
-      return res.status(400).json({ success: false, error: 'Invalid YouTube URL' });
-    }
+    const tempFile = getTempFilePath(`.${format}`);
 
-    const info = await ytdl.getInfo(url);
-    const title = info.videoDetails.title.replace(/[^\w\s-]/g, '').substring(0, 50);
+    const args = [
+      url,
+      '-f', quality,
+      '-o', tempFile
+    ];
 
     if (format === 'mp3') {
-      // Audio only
-      res.setHeader('Content-Disposition', `attachment; filename="${title}.mp3"`);
-      res.setHeader('Content-Type', 'audio/mpeg');
-
-      ytdl(url, {
-        filter: 'audioonly',
-        quality: 'highestaudio'
-      }).pipe(res);
-
-    } else {
-      // Video (MP4)
-      const qualityMap = {
-        '1080p': '137',
-        '720p': '136',
-        '480p': '135',
-        '360p': '134'
-      };
-
-      res.setHeader('Content-Disposition', `attachment; filename="${title}.mp4"`);
-      res.setHeader('Content-Type', 'video/mp4');
-
-      ytdl(url, {
-        quality: qualityMap[quality] || 'highest',
-        filter: 'videoandaudio'
-      }).pipe(res);
+      args.push('--extract-audio', '--audio-format', 'mp3');
     }
-  } catch (error) {
-    console.error('Download error:', error.message);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: 'Download failed' });
-    }
+
+    const ytdlp = spawn('yt-dlp', args);
+
+    const timeout = setTimeout(() => {
+      ytdlp.kill();
+      fs.unlink(tempFile, () => { });
+      res.status(500).json({ success: false, error: 'Download timeout' });
+    }, DOWNLOAD_TIMEOUT);
+
+    ytdlp.stderr.on('data', data => { }); // ignore for now
+
+    ytdlp.on('close', code => {
+      clearTimeout(timeout);
+      if (code !== 0 || !fs.existsSync(tempFile)) {
+        fs.unlink(tempFile, () => { });
+        return res.status(500).json({ success: false, error: 'Failed to download video' });
+      }
+
+      // Check file size
+      const stats = fs.statSync(tempFile);
+      if (stats.size > MAX_FILE_SIZE) {
+        fs.unlinkSync(tempFile);
+        return res.status(413).json({ success: false, error: 'File too large' });
+      }
+
+      // Stream to client
+      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(tempFile)}"`);
+      res.setHeader('Content-Type', format === 'mp3' ? 'audio/mpeg' : 'video/mp4');
+
+      const fileStream = fs.createReadStream(tempFile);
+      fileStream.pipe(res);
+
+      fileStream.on('close', () => {
+        fs.unlink(tempFile, () => { }); // delete after sending
+      });
+    });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
