@@ -1,0 +1,7 @@
+project_id = "nyxseinkiomzccpfqjvk"
+
+[functions.youtube-info]
+verify_jwt = false
+
+[functions.youtube-download]
+verify_jwt = false
