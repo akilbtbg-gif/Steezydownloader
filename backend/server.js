@@ -1,15 +1,11 @@
-// server.js
 const express = require('express');
 const cors = require('cors');
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const rateLimit = require('express-rate-limit');
-const os = require('os');
+const ytdl = require('ytdl-core');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// CORS - allow all for now, update later for your frontend
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
   methods: ['POST', 'OPTIONS'],
@@ -18,134 +14,60 @@ app.use(cors({
 
 app.use(express.json());
 
-// Basic rate limiting
-const limiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 5, // max 5 requests per minute per IP
-  message: { success: false, error: 'Too many requests, slow down!' }
-});
-app.use(limiter);
-
-// Timeout & Max file size (in bytes)
-const DOWNLOAD_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
-
-// Helper to generate temp file
-function getTempFilePath(extension = '.mp4') {
-  return path.join(os.tmpdir(), `yt-${Date.now()}${extension}`);
+// Helper - format duration
+function formatDuration(seconds) {
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  if (hrs > 0) {
+    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// POST /api/info
+// Helper - format views
+function formatViews(count) {
+  const num = parseInt(count);
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M views`;
+  if (num >= 1000) return `${(num / 1000).toFixed(1)}K views`;
+  return `${num} views`;
+}
+
+// POST /api/info - Get video info
 app.post('/api/info', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.json({ success: false, error: 'No URL provided' });
+
   try {
-    const { url } = req.body;
-    if (!url) return res.status(400).json({ success: false, error: 'Missing URL' });
+    const info = await ytdl.getInfo(url);
 
-    // Spawn yt-dlp to get JSON info
-    const ytdlp = spawn('yt-dlp', ['-J', url]);
-
-    let output = '';
-    let errorOutput = '';
-    const timeout = setTimeout(() => {
-      ytdlp.kill();
-      res.status(500).json({ success: false, error: 'Timeout fetching video info' });
-    }, DOWNLOAD_TIMEOUT);
-
-    ytdlp.stdout.on('data', data => output += data.toString());
-    ytdlp.stderr.on('data', data => errorOutput += data.toString());
-
-    ytdlp.on('close', code => {
-      clearTimeout(timeout);
-      if (code !== 0) {
-        return res.status(500).json({ success: false, error: errorOutput || 'Failed fetching video info' });
-      }
-      try {
-        const info = JSON.parse(output);
-        res.json({
-          success: true,
-          data: {
-            id: info.id,
-            title: info.title,
-            uploader: info.uploader,
-            duration: info.duration,
-            thumbnail: info.thumbnail,
-            view_count: info.view_count,
-            formats: info.formats.map(f => ({
-              format_id: f.format_id,
-              ext: f.ext,
-              resolution: f.resolution || f.height + 'p',
-              filesize: f.filesize || 0,
-              note: f.format_note || ''
-            }))
-          }
-        });
-      } catch (err) {
-        res.status(500).json({ success: false, error: 'Invalid info JSON' });
+    const videoDetails = info.videoDetails;
+    res.json({
+      success: true,
+      data: {
+        title: videoDetails.title,
+        author: videoDetails.author.name,
+        duration: formatDuration(videoDetails.lengthSeconds),
+        views: formatViews(videoDetails.viewCount),
+        thumbnail: videoDetails.thumbnails.pop().url,
+        url: videoDetails.video_url
       }
     });
-
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('Error fetching video info:', err);
+    res.json({ success: false, error: 'Failed to fetch video information' });
   }
 });
 
-// POST /api/download
-app.post('/api/download', async (req, res) => {
-  try {
-    const { url, format = 'mp4', quality = 'best' } = req.body;
-    if (!url) return res.status(400).json({ success: false, error: 'Missing URL' });
+// GET /api/download - download video
+app.get('/api/download', (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).send('No URL provided');
 
-    const tempFile = getTempFilePath(`.${format}`);
-
-    const args = [
-      url,
-      '-f', quality,
-      '-o', tempFile
-    ];
-
-    if (format === 'mp3') {
-      args.push('--extract-audio', '--audio-format', 'mp3');
-    }
-
-    const ytdlp = spawn('yt-dlp', args);
-
-    const timeout = setTimeout(() => {
-      ytdlp.kill();
-      fs.unlink(tempFile, () => { });
-      res.status(500).json({ success: false, error: 'Download timeout' });
-    }, DOWNLOAD_TIMEOUT);
-
-    ytdlp.stderr.on('data', data => { }); // ignore for now
-
-    ytdlp.on('close', code => {
-      clearTimeout(timeout);
-      if (code !== 0 || !fs.existsSync(tempFile)) {
-        fs.unlink(tempFile, () => { });
-        return res.status(500).json({ success: false, error: 'Failed to download video' });
-      }
-
-      // Check file size
-      const stats = fs.statSync(tempFile);
-      if (stats.size > MAX_FILE_SIZE) {
-        fs.unlinkSync(tempFile);
-        return res.status(413).json({ success: false, error: 'File too large' });
-      }
-
-      // Stream to client
-      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(tempFile)}"`);
-      res.setHeader('Content-Type', format === 'mp3' ? 'audio/mpeg' : 'video/mp4');
-
-      const fileStream = fs.createReadStream(tempFile);
-      fileStream.pipe(res);
-
-      fileStream.on('close', () => {
-        fs.unlink(tempFile, () => { }); // delete after sending
-      });
-    });
-
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  res.header('Content-Disposition', 'attachment; filename="video.mp4"');
+  ytdl(url, { format: 'mp4' }).pipe(res);
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
