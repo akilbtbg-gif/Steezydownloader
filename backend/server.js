@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import ytdl from "ytdl-core";
+import ytdl from "@distube/ytdl-core";
 import dotenv from "dotenv";
 
 dotenv.config();
