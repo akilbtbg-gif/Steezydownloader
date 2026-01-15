@@ -8,22 +8,27 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS
+/* =======================
+   MIDDLEWARE
+======================= */
 app.use(
   cors({
     origin: process.env.FRONTEND_URL || "*",
-    methods: ["POST", "GET", "OPTIONS"],
+    methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
   })
 );
 
 app.use(express.json());
 
-// Helper - format duration
+/* =======================
+   HELPERS
+======================= */
 function formatDuration(seconds) {
-  const hrs = Math.floor(seconds / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
+  const total = Number(seconds);
+  const hrs = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
 
   if (hrs > 0) {
     return `${hrs}:${mins.toString().padStart(2, "0")}:${secs
@@ -33,41 +38,60 @@ function formatDuration(seconds) {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
-// Helper - format views
 function formatViews(count) {
-  const num = parseInt(count, 10);
+  const num = Number(count);
   if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M views`;
   if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K views`;
   return `${num} views`;
 }
 
+/* =======================
+   ROUTES
+======================= */
+
+// Health check
+app.get("/", (req, res) => {
+  res.json({ success: true, message: "Steezy backend is running 🚀" });
+});
+
 // POST /api/info
 app.post("/api/info", async (req, res) => {
   const { url } = req.body;
+
   if (!url) {
-    return res.status(400).json({ success: false, error: "No URL provided" });
+    return res.status(400).json({
+      success: false,
+      error: "No URL provided",
+    });
+  }
+
+  if (!ytdl.validateURL(url)) {
+    return res.status(400).json({
+      success: false,
+      error: "Invalid YouTube URL",
+    });
   }
 
   try {
     const info = await ytdl.getInfo(url);
-    const videoDetails = info.videoDetails;
+    const video = info.videoDetails;
 
     res.json({
       success: true,
       data: {
-        title: videoDetails.title,
-        author: videoDetails.author.name,
-        duration: formatDuration(videoDetails.lengthSeconds),
-        views: formatViews(videoDetails.viewCount),
-        thumbnail: videoDetails.thumbnails.at(-1)?.url,
-        url: videoDetails.video_url,
+        title: video.title,
+        author: video.author.name,
+        duration: formatDuration(video.lengthSeconds),
+        views: formatViews(video.viewCount),
+        thumbnail: video.thumbnails.at(-1)?.url,
+        url: video.video_url,
       },
     });
   } catch (err) {
-    console.error("Error fetching video info:", err);
+    console.error("YTDL ERROR:", err);
     res.status(500).json({
       success: false,
-      error: err.message || "Failed to fetch video information",
+      error: "Failed to fetch video information",
     });
   }
 });
@@ -75,16 +99,31 @@ app.post("/api/info", async (req, res) => {
 // GET /api/download
 app.get("/api/download", (req, res) => {
   const { url } = req.query;
-  if (!url) return res.status(400).send("No URL provided");
+
+  if (!url) {
+    return res.status(400).send("No URL provided");
+  }
+
+  if (!ytdl.validateURL(url)) {
+    return res.status(400).send("Invalid YouTube URL");
+  }
 
   res.setHeader(
     "Content-Disposition",
     'attachment; filename="video.mp4"'
   );
 
-  ytdl(url, { quality: "highestvideo" }).pipe(res);
+  ytdl(url, { quality: "highestvideo" })
+    .on("error", (err) => {
+      console.error("Download error:", err);
+      res.end();
+    })
+    .pipe(res);
 });
 
+/* =======================
+   START SERVER
+======================= */
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
