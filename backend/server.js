@@ -4,13 +4,13 @@ import ytdl from "@distube/ytdl-core";
 import dotenv from "dotenv";
 
 dotenv.config();
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 /* =======================
    CORS CONFIG
 ======================= */
-
 // Allowed origins: set in .env as comma-separated list
 // Example: ALLOWED_ORIGINS=http://localhost:8080,https://myfrontend.com
 const allowedOrigins = process.env.ALLOWED_ORIGINS
@@ -38,6 +38,7 @@ function formatDuration(seconds) {
   const hrs = Math.floor(total / 3600);
   const mins = Math.floor((total % 3600) / 60);
   const secs = total % 60;
+
   if (hrs > 0) {
     return `${hrs}:${mins.toString().padStart(2, "0")}:${secs
       .toString()
@@ -81,7 +82,14 @@ app.post("/api/info", async (req, res) => {
   }
 
   try {
-    const info = await ytdl.getInfo(url);
+    const info = await ytdl.getInfo(url, {
+      requestOptions: {
+        headers: {
+          cookie: process.env.YOUTUBE_COOKIES || ""
+        }
+      }
+    });
+
     const video = info.videoDetails;
 
     res.json({
@@ -113,7 +121,14 @@ app.get("/api/download", (req, res) => {
 
   res.setHeader("Content-Disposition", 'attachment; filename="video.mp4"');
 
-  ytdl(url, { quality: "highestvideo" })
+  ytdl(url, {
+    quality: "highestvideo",
+    requestOptions: {
+      headers: {
+        cookie: process.env.YOUTUBE_COOKIES || ""
+      }
+    }
+  })
     .on("error", (err) => {
       console.error("Download error:", err);
       res.end();
