@@ -4,24 +4,38 @@ import ytdl from "@distube/ytdl-core";
 import dotenv from "dotenv";
 
 dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 /* =======================
-   MIDDLEWARE
+   CORS CONFIG
 ======================= */
+
+// Allowed origins: set in .env as comma-separated list
+// Example: ALLOWED_ORIGINS=http://localhost:8080,https://myfrontend.com
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",")
+  : ["http://localhost:8080"]; // fallback
+
 app.use(
   cors({
-    origin: "*", // Allow all origins
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // allow non-browser requests (Postman, server-to-server)
+      if (allowedOrigins.indexOf(origin) === -1) {
+        const msg =
+          "The CORS policy for this site does not allow access from the specified Origin.";
+        return callback(new Error(msg), false);
+      }
+      return callback(null, true);
+    },
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
-    credentials: false
+    credentials: true, // allow credentials if needed
   })
 );
 
 // Handle preflight requests
-app.options('*', cors());
+app.options("*", cors());
 
 app.use(express.json());
 
@@ -33,7 +47,6 @@ function formatDuration(seconds) {
   const hrs = Math.floor(total / 3600);
   const mins = Math.floor((total % 3600) / 60);
   const secs = total % 60;
-
   if (hrs > 0) {
     return `${hrs}:${mins.toString().padStart(2, "0")}:${secs
       .toString()
@@ -104,18 +117,10 @@ app.post("/api/info", async (req, res) => {
 app.get("/api/download", (req, res) => {
   const { url } = req.query;
 
-  if (!url) {
-    return res.status(400).send("No URL provided");
-  }
+  if (!url) return res.status(400).send("No URL provided");
+  if (!ytdl.validateURL(url)) return res.status(400).send("Invalid YouTube URL");
 
-  if (!ytdl.validateURL(url)) {
-    return res.status(400).send("Invalid YouTube URL");
-  }
-
-  res.setHeader(
-    "Content-Disposition",
-    'attachment; filename="video.mp4"'
-  );
+  res.setHeader("Content-Disposition", 'attachment; filename="video.mp4"');
 
   ytdl(url, { quality: "highestvideo" })
     .on("error", (err) => {
