@@ -71,3 +71,11 @@ app.get('/api/download', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+try {
+  const info = await ytdl.getInfo(url)
+  res.json({ success: true, info })
+} catch (err) {
+  console.error(err) // 👈 ADD THIS
+  res.json({ success: false, error: err.message })
+}
