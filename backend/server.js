@@ -1,16 +1,21 @@
-const express = require('express');
-const cors = require('cors');
-const ytdl = require('ytdl-core');
+import express from "express";
+import cors from "cors";
+import ytdl from "ytdl-core";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS - allow all for now, update later for your frontend
-app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
-  methods: ['POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type']
-}));
+// CORS
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "*",
+    methods: ["POST", "GET", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
 
 app.use(express.json());
 
@@ -19,29 +24,34 @@ function formatDuration(seconds) {
   const hrs = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = seconds % 60;
+
   if (hrs > 0) {
-    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${hrs}:${mins.toString().padStart(2, "0")}:${secs
+      .toString()
+      .padStart(2, "0")}`;
   }
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
 // Helper - format views
 function formatViews(count) {
-  const num = parseInt(count);
-  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M views`;
-  if (num >= 1000) return `${(num / 1000).toFixed(1)}K views`;
+  const num = parseInt(count, 10);
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M views`;
+  if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K views`;
   return `${num} views`;
 }
 
-// POST /api/info - Get video info
-app.post('/api/info', async (req, res) => {
+// POST /api/info
+app.post("/api/info", async (req, res) => {
   const { url } = req.body;
-  if (!url) return res.json({ success: false, error: 'No URL provided' });
+  if (!url) {
+    return res.status(400).json({ success: false, error: "No URL provided" });
+  }
 
   try {
     const info = await ytdl.getInfo(url);
-
     const videoDetails = info.videoDetails;
+
     res.json({
       success: true,
       data: {
@@ -49,33 +59,32 @@ app.post('/api/info', async (req, res) => {
         author: videoDetails.author.name,
         duration: formatDuration(videoDetails.lengthSeconds),
         views: formatViews(videoDetails.viewCount),
-        thumbnail: videoDetails.thumbnails.pop().url,
-        url: videoDetails.video_url
-      }
+        thumbnail: videoDetails.thumbnails.at(-1)?.url,
+        url: videoDetails.video_url,
+      },
     });
   } catch (err) {
-    console.error('Error fetching video info:', err);
-    res.json({ success: false, error: 'Failed to fetch video information' });
+    console.error("Error fetching video info:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message || "Failed to fetch video information",
+    });
   }
 });
 
-// GET /api/download - download video
-app.get('/api/download', (req, res) => {
+// GET /api/download
+app.get("/api/download", (req, res) => {
   const { url } = req.query;
-  if (!url) return res.status(400).send('No URL provided');
+  if (!url) return res.status(400).send("No URL provided");
 
-  res.header('Content-Disposition', 'attachment; filename="video.mp4"');
-  ytdl(url, { format: 'mp4' }).pipe(res);
+  res.setHeader(
+    "Content-Disposition",
+    'attachment; filename="video.mp4"'
+  );
+
+  ytdl(url, { quality: "highestvideo" }).pipe(res);
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
 });
-
-try {
-  const info = await ytdl.getInfo(url)
-  res.json({ success: true, info })
-} catch (err) {
-  console.error(err) // 👈 ADD THIS
-  res.json({ success: false, error: err.message })
-}
