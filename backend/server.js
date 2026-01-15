@@ -2,11 +2,21 @@ import express from "express";
 import cors from "cors";
 import ytdl from "@distube/ytdl-core";
 import dotenv from "dotenv";
+import { readFileSync } from "fs";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Load YouTube cookies
+let youtubeCookies = [];
+try {
+  youtubeCookies = JSON.parse(readFileSync('./youtube-cookies.json', 'utf8'));
+  console.log('✅ YouTube cookies loaded successfully');
+} catch (err) {
+  console.warn('⚠️  No YouTube cookies found');
+}
 
 /* =======================
    CORS CONFIG
@@ -83,11 +93,7 @@ app.post("/api/info", async (req, res) => {
 
   try {
     const info = await ytdl.getInfo(url, {
-      requestOptions: {
-        headers: {
-          cookie: process.env.YOUTUBE_COOKIES || ""
-        }
-      }
+      cookies: youtubeCookies
     });
 
     const video = info.videoDetails;
@@ -123,11 +129,7 @@ app.get("/api/download", (req, res) => {
 
   ytdl(url, {
     quality: "highestvideo",
-    requestOptions: {
-      headers: {
-        cookie: process.env.YOUTUBE_COOKIES || ""
-      }
-    }
+    cookies: youtubeCookies
   })
     .on("error", (err) => {
       console.error("Download error:", err);
