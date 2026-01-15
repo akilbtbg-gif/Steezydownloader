@@ -13,11 +13,15 @@ const PORT = process.env.PORT || 3001;
 ======================= */
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "*",
+    origin: "*", // Allow all origins
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
+    credentials: false
   })
 );
+
+// Handle preflight requests
+app.options('*', cors());
 
 app.use(express.json());
 
