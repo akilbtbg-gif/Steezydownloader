@@ -29,9 +29,10 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 
 app.use(
   cors({
-    origin: "*",
+    origin: ["https://steezydownloader.online", "https://www.steezydownloader.online", "http://localhost:5173"],
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
+    credentials: false
   })
 );
 
